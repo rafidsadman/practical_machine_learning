@@ -1,0 +1,181 @@
+---
+title: 'Identifying Different Weight Lifting Exercises: A Machine Learning Approach'
+author: "Rafid Sadman Eesha"
+date: "7/10/2020"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+## Executive Summary
+The project has been done on the data by HAR http://groupware.les.inf.puc-rio.br/har . Our goal was to use the data to predict the exercise performed by the user. We have first read and processed the data. And then we have run some exploratory analysis followed by GBM model training. And finally we have crossvalidated our results using the testing and validation dataset. 
+
+## Libraries in use
+
+```{R, cache = TRUE, message = F}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(Rmisc)
+library(reshape2)
+```
+
+## Reading and Processing Data
+
+First, let's read both the training and testing data set. Since the testing dataset has only 20 observation, we are gonna set it aside and store it in an object named "validation". And use the training dataset as the main data for both training and testing models. 
+
+```{R, cache = TRUE}
+data <- read.csv("pml-training.csv")
+validation <- read.csv("pml-testing.csv")
+```
+
+Now let's take a look at the data. 
+
+```{R, cache = TRUE}
+str(data)
+```
+
+We can see that a lot of variables are in character format and a lot of the variables have NA or blank in their data. So we need to process the data to make it ready for our model building. 
+
+1. We don't need timestamps, names, observation number, window number etc to develop our model so we will get rid of them.
+
+```{R, cache = TRUE}
+data2 <- data %>% select(-c(1,2,3,4,5,6,7))
+```
+
+2. We remove all the columns with blank or NA value. 
+```{R, cache = TRUE, warning = FALSE}
+data2 <- data2 %>% 
+  mutate_if(is.character, as.numeric)
+
+data2 <- data2 %>% 
+  select_if(~ !any(is.na(.)))
+
+data2 <- data2 %>% 
+  mutate_if(is.integer, as.numeric)
+
+data2 <- data2 %>% 
+  mutate_if(is.character, as.factor)
+```
+
+But in this process we have removed our response variable "classe" as well. Thus we readd them in the data2 dataframe. 
+
+```{R, cache = TRUE}
+data2$classe <- data$classe
+```
+
+3. Now we take the validation dataframe and remove the columns that were removed from main dataframe and prepare the validation dataframe for prediction.
+
+```{R, cache = TRUE, warning = FALSE}
+col_names <- colnames(data)
+excluded <- setdiff(col_names, names(data2))
+rm(data)
+validation <- validation %>% select(-excluded)
+```
+
+Now the dataframes are ready for further observation and model building. 
+
+## Creating Training and Testing dataframes 
+
+Let's create train and test data from the data2 dataframe. 
+```{R, cache = TRUE}
+set.seed(433566)
+inTrain <- createDataPartition(data2$classe, p = 0.6, list = F)
+training <- data2[inTrain, ]
+testing <- data2[-inTrain, ]
+```
+
+Let's take a look at their dimensions. 
+```{R, cache = TRUE}
+dim(training)
+dim(testing)
+```
+
+Thus we can see that the training dataset has 11776 observations which is enough for model building. And 7846 observations for test dataset, enough for checking the validity of the model. 
+
+## Exploratory Data Analysis
+
+Let's take a look at some of the variables and their effect on the response variable. 
+```{R, cache = TRUE}
+g <- ggplot(training, aes(classe, pitch_forearm))
+g <- g + geom_boxplot(aes(color = classe))
+
+h <- ggplot(training, aes(classe, yaw_arm))
+h <- h + geom_boxplot(aes(color = classe))
+
+i <- ggplot(training, aes(classe, magnet_arm_x))
+i <- i + geom_boxplot(aes(color = classe))
+
+j <- ggplot(training, aes(classe, roll_dumbbell))
+j <- j + geom_boxplot(aes(color = classe))
+
+multiplot(g, h, i, j, cols = 2)
+```
+
+Thus we can see that there might be no "one" variable to explain the response variable. Let's take a look at the variables and correlation among them. 
+
+```{R, cache = TRUE}
+cordata <- training[,-53]
+cormat <- round(cor(cordata),3)
+melted_cormat <- melt(cormat)
+
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + theme(axis.text.x=element_blank(), axis.ticks.x=element_blank()) 
+```
+
+Thus we can see that there are moderate correlation among most of the variables and some variables have very high correlation among them. 
+
+Thus a good option might be to use principle component analysis for the model building. 
+
+## Model Building 
+
+Let's do PCA on the dataframes setting the threshold at 90%. We will also make new dataframes for training, testing and validation dataframes.
+
+```{R, cache = TRUE}
+pre.pca <- preProcess(training[,-53], method = "pca", thresh = 0.90)
+
+training.pca <- predict(pre.pca, training[,-53])
+testing.pca <- predict(pre.pca, testing[,-53])
+validation.pca <- predict(pre.pca, validation[,-53])
+
+training.pca$classe <- training$classe
+testing.pca$classe <- testing$classe
+```
+
+We'll now train our model using gradient boosting machine(GBM) method.
+```{R, cache = TRUE, warning = FALSE}
+gbm_model <- train(classe ~ ., data = training.pca, method = "gbm", verbose = F)
+```
+
+## Model Examination and Checking out of sample Accuracy 
+
+Now that we have our model, let's examine it. 
+```{R, cache = TRUE}
+gbm_model
+```
+
+Now We can see that the model has an almost 80% within sample accuracy, 
+Now let's run the model on the testing dataframe to check out of sample accuracy of the model using confusion matrix.
+
+```{R, cache = TRUE}
+preds <- predict(gbm_model, testing.pca)
+
+testing.pca$classe <- as.factor(testing.pca$classe)
+confusionMatrix(testing.pca$classe, preds)
+```
+
+Thus we can see that the model is around 80% accurate. However, the accuracy can be increased by setting the PCA threshold to 99%. We didn't do it here for the sake of making the markdown document. As the in that case training the model would have taken more than an hour. 
+
+## Running the model to Predict 20 Cases
+
+Let's run the model on the 20 test cases and check the answers 
+```{R, cache = TRUE}
+results <- t(as.data.frame(predict(gbm_model, validation.pca)))
+results
+```
+
+## Conclusion 
+
+We have used a lower threshold in PCA to keep the number of Principal Components so that we can train our model faster. and On the other hand we have used GBM model as it has the best accuracy and is slightly faster than Random Forest model. 
+
+However, even after sacrficing quite a bit it has given us a pretty accurate results.  
